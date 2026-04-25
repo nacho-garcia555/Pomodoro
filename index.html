@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusFlow — Pomodoro con Ruido</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {
+            --bg: #08080f;
+            --bg-card: rgba(255,255,255,0.03);
+            --fg: #f5f0e8;
+            --muted: #7a7590;
+            --accent: #e8a838;
+            --accent-glow: rgba(232,168,56,0.25);
+            --accent-ring: rgba(232,168,56,0.6);
+            --break-accent: #2dd4bf;
+            --break-glow: rgba(45,212,191,0.25);
+            --break-ring: rgba(45,212,191,0.6);
+            --border: rgba(255,255,255,0.07);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* === FONDO ANIMADO === */
+        #bgCanvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .ambient-blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: 0;
+            transition: background 2s ease;
+        }
+        .blob-1 {
+            width: 500px; height: 500px;
+            top: -100px; left: -100px;
+            background: var(--accent);
+            animation: blobDrift1 20s ease-in-out infinite;
+        }
+        .blob-2 {
+            width: 400px; height: 400px;
+            bottom: -80px; right: -80px;
+            background: var(--accent);
+            animation: blobDrift2 25s ease-in-out infinite;
+        }
+        .blob-3 {
+            width: 300px; height: 300px;
+            top: 50%; left: 60%;
+            background: var(--accent);
+            opacity: 0.08;
+            animation: blobDrift3 18s ease-in-out infinite;
+        }
+        body.break-mode .blob-1,
+        body.break-mode .blob-2,
+        body.break-mode .blob-3 { background: var(--break-accent); }
+
+        @keyframes blobDrift1 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(80px, 60px) scale(1.1); }
+            66% { transform: translate(-40px, 100px) scale(0.9); }
+        }
+        @keyframes blobDrift2 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(-60px, -80px) scale(1.15); }
+            66% { transform: translate(50px, -40px) scale(0.85); }
+        }
+        @keyframes blobDrift3 {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(-100px, 50px) scale(1.2); }
+        }
+
+        /* === CONTENEDOR PRINCIPAL === */
+        #app {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 28px;
+            padding: 24px;
+            width: 100%;
+            max-width: 640px;
+        }
+
+        /* === LOGO === */
+        .logo {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.3rem;
+            letter-spacing: -0.02em;
+            color: var(--fg);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .logo-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 12px var(--accent-glow);
+            transition: background 2s ease, box-shadow 2s ease;
+        }
+        body.break-mode .logo-dot {
+            background: var(--break-accent);
+            box-shadow: 0 0 12px var(--break-glow);
+        }
+
+        /* === TEMPORIZADOR === */
+        .timer-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .timer-glow {
+            position: absolute;
+            width: 320px; height: 320px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            filter: blur(50px);
+            opacity: 0.4;
+            animation: breathe 4s ease-in-out infinite;
+            transition: background 2s ease;
+        }
+        .timer-glow.paused { animation-play-state: paused; opacity: 0.15; }
+        body.break-mode .timer-glow {
+            background: radial-gradient(circle, var(--break-glow) 0%, transparent 70%);
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.08); opacity: 0.55; }
+        }
+
+        .timer-svg {
+            width: 290px; height: 290px;
+            transform: rotate(-90deg);
+        }
+        .timer-bg-ring {
+            fill: none;
+            stroke: var(--border);
+            stroke-width: 5;
+        }
+        .timer-progress-ring {
+            fill: none;
+            stroke: var(--accent);
+            stroke-width: 5;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.5s ease, stroke 2s ease;
+            filter: drop-shadow(0 0 6px var(--accent-ring));
+        }
+        body.break-mode .timer-progress-ring {
+            stroke: var(--break-accent);
+            filter: drop-shadow(0 0 6px var(--break-ring));
+        }
+
+        .timer-display {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+        .timer-time {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 4rem;
+            font-weight: 300;
+            letter-spacing: -2px;
+            line-height: 1;
+        }
+        .timer-time .colon {
+            animation: blink 1s step-end infinite;
+        }
+        .timer-time .colon.paused { animation: none; opacity: 0.4; }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.2; }
+        }
+
+        .timer-mode {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: var(--accent);
+            transition: color 2s ease;
+        }
+        body.break-mode .timer-mode { color: var(--break-accent); }
+
+        .timer-sessions {
+            font-size: 0.7rem;
+            color: var(--muted);
+            margin-top: 2px;
+        }
+
+        /* === BOTONES === */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            cursor: pointer;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            outline: none;
+        }
+        .btn:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+        }
+
+        .btn-primary {
+            width: 64px; height: 64px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: #0a0a0f;
+            font-size: 1.3rem;
+            box-shadow: 0 0 30px var(--accent-glow), 0 4px 15px rgba(0,0,0,0.4);
+        }
+        .btn-primary:hover {
+            transform: scale(1.08);
+            box-shadow: 0 0 40px var(--accent-glow), 0 6px 20px rgba(0,0,0,0.5);
+        }
+        .btn-primary:active { transform: scale(0.96); }
+        body.break-mode .btn-primary {
+            background: var(--break-accent);
+            box-shadow: 0 0 30px var(--break-glow), 0 4px 15px rgba(0,0,0,0.4);
+        }
+        body.break-mode .btn-primary:hover {
+            box-shadow: 0 0 40px var(--break-glow), 0 6px 20px rgba(0,0,0,0.5);
+        }
+
+        .btn-secondary {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            background: var(--bg-card);
+            color: var(--muted);
+            font-size: 0.9rem;
+            border: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+        }
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.08);
+            color: var(--fg);
+            transform: scale(1.06);
+        }
+        .btn-secondary:active { transform: scale(0.94); }
+
+        /* === MEZCLADOR DE SONIDOS === */
+        .sound-mixer {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .sound-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 14px 12px 10px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            min-width: 88px;
+            cursor: pointer;
+            transition: all 0.4s ease;
+            user-select: none;
+        }
+        .sound-card:hover {
+            background: rgba(255,255,255,0.06);
+            transform: translateY(-2px);
+        }
+        .sound-card.active {
+            border-color: var(--accent);
+            background: rgba(232,168,56,0.06);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+        body.break-mode .sound-card.active {
+            border-color: var(--break-accent);
+            background: rgba(45,212,191,0.06);
+            box-shadow: 0 0 20px var(--break-glow);
+        }
+
+        .sound-icon {
+            font-size: 1.3rem;
+            color: var(--muted);
+            transition: color 0.4s ease, text-shadow 0.4s ease;
+        }
+        .sound-card.active .sound-icon {
+            color: var(--accent);
+            text-shadow: 0 0 12px var(--accent-glow);
+        }
+        body.break-mode .sound-card.active .sound-icon {
+            color: var(--break-accent);
+            text-shadow: 0 0 12px var(--break-glow);
+        }
+
+        .sound-name {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.65rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--muted);
+            transition: color 0.4s ease;
+        }
+        .sound-card.active .sound-name { color: var(--fg); }
+
+        .sound-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 60px;
+            height: 3px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.1);
+            outline: none;
+            cursor: pointer;
+            transition: opacity 0.3s;
+            opacity: 0.4;
+        }
+        .sound-card.active .sound-slider { opacity: 1; }
+        .sound-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .sound-slider::-moz-range-thumb {
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: none;
+            cursor: pointer;
+        }
+        body.break-mode .sound-slider::-webkit-slider-thumb { background: var(--break-accent); }
+        body.break-mode .sound-slider::-moz-range-thumb { background: var(--break-accent); }
+
+        /* === FRASE MOTIVACIONAL === */
+        .quote-section {
+            text-align: center;
+            max-width: 460px;
+            min-height: 60px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .quote-text {
+            font-size: 0.95rem;
+            font-style: italic;
+            line-height: 1.6;
+            color: rgba(245,240,232,0.7);
+            transition: opacity 0.8s ease, transform 0.8s ease;
+        }
+        .quote-text.fade-out {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+        .quote-author {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.7rem;
+            font-weight: 500;
+            color: var(--muted);
+            margin-top: 6px;
+            transition: opacity 0.8s ease, transform 0.8s ease;
+        }
+        .quote-author.fade-out {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+
+        /* === TOAST === */
+        .toast {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-80px);
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            background: rgba(20,20,35,0.9);
+            border: 1px solid var(--border);
+            backdrop-filter: blur(20px);
+            color: var(--fg);
+            z-index: 100;
+            opacity: 0;
+            transition: transform 0.5s cubic-bezier(0.34,1.56,0.64,1), opacity 0.5s ease;
+            pointer-events: none;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* === ATAJO DE TECLADO === */
+        .shortcuts {
+            display: flex;
+            gap: 16px;
+            font-size: 0.65rem;
+            color: var(--muted);
+            opacity: 0.5;
+        }
+        .shortcuts kbd {
+            display: inline-block;
+            padding: 1px 5px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.6rem;
+        }
+
+        /* === CELEBRACIÓN === */
+        .celebrate-ring {
+            animation: celebratePulse 0.8s ease-out;
+        }
+        @keyframes celebratePulse {
+            0% { transform: rotate(-90deg) scale(1); filter: drop-shadow(0 0 6px var(--accent-ring)); }
+            50% { transform: rotate(-90deg) scale(1.04); filter: drop-shadow(0 0 25px var(--accent-ring)); }
+            100% { transform: rotate(-90deg) scale(1); filter: drop-shadow(0 0 6px var(--accent-ring)); }
+        }
+
+        /* === RESPONSIVE === */
+        @media (max-width: 480px) {
+            .timer-svg { width: 230px; height: 230px; }
+            .timer-glow { width: 250px; height: 250px; }
+            .timer-time { font-size: 3rem; }
+            .sound-card { min-width: 72px; padding: 10px 8px 8px; }
+            .sound-slider { width: 48px; }
+        }
+
+        /* === REDUCIR MOVIMIENTO === */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Fondo -->
+    <canvas id="bgCanvas" aria-hidden="true"></canvas>
+    <div class="ambient-blob blob-1" aria-hidden="true"></div>
+    <div class="ambient-blob blob-2" aria-hidden="true"></div>
+    <div class="ambient-blob blob-3" aria-hidden="true"></div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast" role="alert"></div>
+
+    <!-- App -->
+    <div id="app">
+        <!-- Logo -->
+        <div class="logo">
+            <span class="logo-dot"></span>
+            <span>FocusFlow</span>
+        </div>
+
+        <!-- Temporizador -->
+        <div class="timer-wrapper">
+            <div class="timer-glow" id="timerGlow"></div>
+            <svg class="timer-svg" id="timerSvg" viewBox="0 0 300 300">
+                <circle class="timer-bg-ring" cx="150" cy="150" r="140" />
+                <circle class="timer-progress-ring" id="progressRing" cx="150" cy="150" r="140" />
+            </svg>
+            <div class="timer-display">
+                <div class="timer-time" id="timerTime">
+                    <span id="minutes">50</span><span class="colon" id="colon">:</span><span id="seconds">00</span>
+                </div>
+                <div class="timer-mode" id="timerMode">Enfoque</div>
+                <div class="timer-sessions" id="timerSessions">Sesion 1</div>
+            </div>
+        </div>
+
+        <!-- Controles -->
+        <div class="controls">
+            <button class="btn btn-secondary" id="btnReset" aria-label="Reiniciar temporizador" title="Reiniciar">
+                <i class="fas fa-undo"></i>
+            </button>
+            <button class="btn btn-primary" id="btnPlay" aria-label="Iniciar o pausar temporizador" title="Iniciar / Pausar">
+                <i class="fas fa-play" id="playIcon"></i>
+            </button>
+            <button class="btn btn-secondary" id="btnSkip" aria-label="Saltar a la siguiente fase" title="Siguiente fase">
+                <i class="fas fa-forward"></i>
+            </button>
+        </div>
+
+        <!-- Mezclador de sonidos -->
+        <section class="sound-mixer" aria-label="Mezclador de sonidos ambientales">
+            <div class="sound-card" data-sound="rain" tabindex="0" role="button" aria-pressed="false" aria-label="Sonido de lluvia">
+                <i class="fas fa-cloud-rain sound-icon"></i>
+                <span class="sound-name">Lluvia</span>
+                <input type="range" class="sound-slider" min="0" max="100" value="50" aria-label="Volumen de lluvia">
+            </div>
+            <div class="sound-card" data-sound="storm" tabindex="0" role="button" aria-pressed="false" aria-label="Sonido de tormenta">
+                <i class="fas fa-bolt sound-icon"></i>
+                <span class="sound-name">Tormenta</span>
+                <input type="range" class="sound-slider" min="0" max="100" value="50" aria-label="Volumen de tormenta">
+            </div>
+            <div class="sound-card" data-sound="fire" tabindex="0" role="button" aria-pressed="false" aria-label="Sonido de fogata">
+                <i class="fas fa-fire sound-icon"></i>
+                <span class="sound-name">Fogata</span>
+                <input type="range" class="sound-slider" min="0" max="100" value="50" aria-label="Volumen de fogata">
+            </div>
+            <div class="sound-card" data-sound="wind" tabindex="0" role="button" aria-pressed="false" aria-label="Sonido de viento">
+                <i class="fas fa-wind sound-icon"></i>
+                <span class="sound-name">Viento</span>
+                <input type="range" class="sound-slider" min="0" max="100" value="50" aria-label="Volumen de viento">
+            </div>
+            <div class="sound-card" data-sound="night" tabindex="0" role="button" aria-pressed="false" aria-label="Sonido nocturno">
+                <i class="fas fa-moon sound-icon"></i>
+                <span class="sound-name">Noche</span>
+                <input type="range" class="sound-slider" min="0" max="100" value="50" aria-label="Volumen nocturno">
+            </div>
+        </section>
+
+        <!-- Frase motivacional -->
+        <section class="quote-section" aria-label="Frase motivacional" aria-live="polite">
+            <p class="quote-text" id="quoteText"></p>
+            <span class="quote-author" id="quoteAuthor"></span>
+        </section>
+
+        <!-- Atajos de teclado -->
+        <div class="shortcuts">
+            <span><kbd>Espacio</kbd> Iniciar/Pausar</span>
+            <span><kbd>R</kbd> Reiniciar</span>
+            <span><kbd>S</kbd> Saltar</span>
+        </div>
+    </div>
+
+    <script>
+    // ================================================
+    // CONFIGURACIÓN
+    // ================================================
+    const FOCUS_DURATION = 50 * 60;
+    const BREAK_DURATION = 10 * 60;
+    const CIRCUMFERENCE = 2 * Math.PI * 140;
+
+    // ================================================
+    // ESTADO
+    // ================================================
+    const state = {
+        mode: 'focus',
+        running: false,
+        timeLeft: FOCUS_DURATION,
+        totalTime: FOCUS_DURATION,
+        sessions: 1,
+        endTime: null,
+        intervalId: null,
+        activeSounds: new Set()
+    };
+
+    // ================================================
+    // ELEMENTOS DEL DOM
+    // ================================================
+    const $minutes = document.getElementById('minutes');
+    const $seconds = document.getElementById('seconds');
+    const $colon = document.getElementById('colon');
+    const $mode = document.getElementById('timerMode');
+    const $sessions = document.getElementById('timerSessions');
+    const $progress = document.getElementById('progressRing');
+    const $timerGlow = document.getElementById('timerGlow');
+    const $timerSvg = document.getElementById('timerSvg');
+    const $btnPlay = document.getElementById('btnPlay');
+    const $playIcon = document.getElementById('playIcon');
+    const $btnReset = document.getElementById('btnReset');
+    const $btnSkip = document.getElementById('btnSkip');
+    const $quoteText = document.getElementById('quoteText');
+    const $quoteAuthor = document.getElementById('quoteAuthor');
+    const $toast = document.getElementById('toast');
+
+    // Inicializar el anillo de progreso
+    $progress.style.strokeDasharray = CIRCUMFERENCE;
+    $progress.style.strokeDashoffset = '0';
+
+    // ================================================
+    // FRASES MOTIVACIONALES
+    // ================================================
+    const quotes = [
+        { text: "El éxito es la suma de pequeños esfuerzos repetidos día tras día.", author: "Robert Collier" },
+        { text: "No cuentes los días, haz que los días cuenten.", author: "Muhammad Ali" },
+        { text: "La disciplina es el puente entre metas y logros.", author: "Jim Rohn" },
+        { text: "El único modo de hacer un gran trabajo es amar lo que haces.", author: "Steve Jobs" },
+        { text: "Cada momento es un nuevo comienzo.", author: "T.S. Eliot" },
+        { text: "Tu tiempo es limitado, no lo malgastes viviendo la vida de otro.", author: "Steve Jobs" },
+        { text: "El futuro pertenece a quienes creen en la belleza de sus sueños.", author: "Eleanor Roosevelt" },
+        { text: "La diferencia entre lo ordinario y lo extraordinario es ese poco extra.", author: "Jimmy Johnson" },
+        { text: "Concéntrate en el paso que das, no en toda la escalera.", author: "Martin Luther King Jr." },
+        { text: "No esperes. El tiempo nunca será el adecuado.", author: "Napoleon Hill" },
+        { text: "La productividad nunca es un accidente. Siempre es el resultado de un compromiso con la excelencia.", author: "Paul J. Meyer" },
+        { text: "Lo que haces hoy puede mejorar todos tus mañanas.", author: "Ralph Marston" },
+        { text: "El secreto para salir adelante es simplemente empezar.", author: "Mark Twain" },
+        { text: "No es la carga lo que te rompe, sino la forma en que la llevas.", author: "Lou Holtz" },
+        { text: "Los grandes logros no nacen de la comodidad, sino de la perseverancia.", author: "Anónimo" },
+        { text: "Haz lo que puedas, con lo que tengas, donde estés.", author: "Theodore Roosevelt" },
+        { text: "El momento en que quieres rendirte es el momento en que debes seguir adelante.", author: "Anónimo" },
+        { text: "Enfócate en ser productivo en lugar de simplemente estar ocupado.", author: "Tim Ferriss" },
+    ];
+
+    let currentQuoteIndex = -1;
+    let quoteIntervalId = null;
+
+    function showNextQuote() {
+        // Elegir una frase diferente
+        let nextIndex;
+        do {
+            nextIndex = Math.floor(Math.random() * quotes.length);
+        } while (nextIndex === currentQuoteIndex && quotes.length > 1);
+        currentQuoteIndex = nextIndex;
+
+        const q = quotes[nextIndex];
+
+        // Desvanecer
+        $quoteText.classList.add('fade-out');
+        $quoteAuthor.classList.add('fade-out');
+
+        setTimeout(() => {
+            $quoteText.textContent = `"${q.text}"`;
+            $quoteAuthor.textContent = `— ${q.author}`;
+            $quoteText.classList.remove('fade-out');
+            $quoteAuthor.classList.remove('fade-out');
+        }, 800);
+    }
+
+    // ================================================
+    // MOTOR DE SONIDO (Web Audio API)
+    // ================================================
+    class SoundEngine {
+        constructor() {
+            this.ctx = null;
+            this.masterGain = null;
+            this.sounds = {};
+            this.initialized = false;
+        }
+
+        init() {
+            if (this.initialized) return;
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this.masterGain = this.ctx.createGain();
+            this.masterGain.gain.value = 0.7;
+            this.masterGain.connect(this.ctx.destination);
+            this.createSounds();
+            this.initialized = true;
+        }
+
+        createNoiseBuffer() {
+            const size = 2 * this.ctx.sampleRate;
+            const buffer = this.ctx.createBuffer(1, size, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < size; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+            return buffer;
+        }
+
+        createPinkNoiseBuffer() {
+            const size = 2 * this.ctx.sampleRate;
+            const buffer = this.ctx.createBuffer(1, size, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+            for (let i = 0; i < size; i++) {
+                const white = Math.random() * 2 - 1;
+                b0 = 0.99886 * b0 + white * 0.0555179;
+                b1 = 0.99332 * b1 + white * 0.0750759;
+                b2 = 0.96900 * b2 + white * 0.1538520;
+                b3 = 0.86650 * b3 + white * 0.3104856;
+                b4 = 0.55000 * b4 + white * 0.5329522;
+                b5 = -0.7616 * b5 - white * 0.0168980;
+                data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+                b6 = white * 0.115926;
+            }
+            return buffer;
+        }
+
+        createSounds() {
+            // Lluvia: ruido blanco → filtro pasa-banda (agudo)
+            this.sounds.rain = this.createNoiseSound('white', 'bandpass', 3500, 0.8);
+
+            // Tormenta: ruido blanco → filtro pasa-bajos (grave)
+            this.sounds.storm = this.createNoiseSound('white', 'lowpass', 350, 1.2);
+
+            // Fogata: ruido blanco → filtro pasa-banda (medio-alto)
+            this.sounds.fire = this.createNoiseSound('white', 'bandpass', 1800, 1.5);
+
+            // Viento: ruido blanco → filtro pasa-bajos con LFO
+            const wind = this.createNoiseSound('white', 'lowpass', 700, 0.8);
+            // Añadir LFO al filtro de viento
+            const lfo = this.ctx.createOscillator();
+            const lfoGain = this.ctx.createGain();
+            lfo.type = 'sine';
+            lfo.frequency.value = 0.15;
+            lfoGain.gain.value = 300;
+            lfo.connect(lfoGain);
+            lfoGain.connect(wind.filter.frequency);
+            lfo.start();
+            wind.lfo = lfo;
+            this.sounds.wind = wind;
+
+            // Noche: ruido rosa → filtro pasa-bajos suave
+            this.sounds.night = this.createNoiseSound('pink', 'lowpass', 2200, 0.6);
+        }
+
+        createNoiseSound(bufferType, filterType, filterFreq, filterQ) {
+            const source = this.ctx.createBufferSource();
+            source.buffer = bufferType === 'pink' ? this.createPinkNoiseBuffer() : this.createNoiseBuffer();
+            source.loop = true;
+
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = filterType;
+            filter.frequency.value = Math.max(10, filterFreq);
+            filter.Q.value = Math.max(0.001, filterQ);
+
+            const gain = this.ctx.createGain();
+            gain.gain.value = 0;
+
+            source.connect(filter);
+            filter.connect(gain);
+            gain.connect(this.masterGain);
+            source.start();
+
+            return { source, filter, gain, volume: 0.5 };
+        }
+
+        setVolume(soundKey, vol) {
+            if (!this.sounds[soundKey]) return;
+            const sound = this.sounds[soundKey];
+            sound.volume = vol;
+            const targetGain = state.activeSounds.has(soundKey) ? vol * 0.5 : 0;
+            sound.gain.gain.linearRampToValueAtTime(Math.max(0, targetGain), this.ctx.currentTime + 0.1);
+        }
+
+        toggleSound(soundKey, active) {
+            if (!this.sounds[soundKey]) return;
+            const sound = this.sounds[soundKey];
+            const targetGain = active ? sound.volume * 0.5 : 0;
+            sound.gain.gain.linearRampToValueAtTime(Math.max(0, targetGain), this.ctx.currentTime + 0.15);
+        }
+
+        // Sonido de campana para notificación
+        playBell() {
+            if (!this.ctx) return;
+            const now = this.ctx.currentTime;
+            [880, 1100, 1320].forEach((freq, i) => {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0, now + i * 0.12);
+                gain.gain.linearRampToValueAtTime(0.15, now + i * 0.12 + 0.05);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 1.2);
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start(now + i * 0.12);
+                osc.stop(now + i * 0.12 + 1.5);
+            });
+        }
+    }
+
+    const soundEngine = new SoundEngine();
+
+    // ================================================
+    // TEMPORIZADOR
+    // ================================================
+    function formatTime(totalSeconds) {
+        const m = Math.floor(totalSeconds / 60);
+        const s = totalSeconds % 60;
+        return {
+            minutes: String(m).padStart(2, '0'),
+            seconds: String(s).padStart(2, '0')
+        };
+    }
+
+    function updateDisplay() {
+        const { minutes, seconds } = formatTime(state.timeLeft);
+        $minutes.textContent = minutes;
+        $seconds.textContent = seconds;
+
+        // Progreso del anillo
+        const progress = 1 - (state.timeLeft / state.totalTime);
+        $progress.style.strokeDashoffset = CIRCUMFERENCE * (1 - progress);
+
+        // Modo
+        $mode.textContent = state.mode === 'focus' ? 'Enfoque' : 'Descanso';
+        $sessions.textContent = `Sesion ${state.sessions}`;
+
+        // Estado del botón play/pause
+        $playIcon.className = state.running ? 'fas fa-pause' : 'fas fa-play';
+
+        // Colon blink
+        $colon.classList.toggle('paused', !state.running);
+
+        // Glow
+        $timerGlow.classList.toggle('paused', !state.running);
+    }
+
+    function startTimer() {
+        soundEngine.init();
+        if (state.running) return;
+        state.running = true;
+        state.endTime = Date.now() + state.timeLeft * 1000;
+
+        state.intervalId = setInterval(() => {
+            const remaining = Math.max(0, Math.ceil((state.endTime - Date.now()) / 1000));
+            state.timeLeft = remaining;
+            updateDisplay();
+
+            if (state.timeLeft <= 0) {
+                clearInterval(state.intervalId);
+                switchMode();
+            }
+        }, 250);
+
+        updateDisplay();
+    }
+
+    function pauseTimer() {
+        if (!state.running) return;
+        state.running = false;
+        clearInterval(state.intervalId);
+        state.intervalId = null;
+        updateDisplay();
+    }
+
+    function resetTimer() {
+        pauseTimer();
+        state.timeLeft = state.mode === 'focus' ? FOCUS_DURATION : BREAK_DURATION;
+        state.totalTime = state.timeLeft;
+        $progress.style.strokeDashoffset = '0';
+        updateDisplay();
+    }
+
+    function switchMode() {
+        // Reproducir campana
+        soundEngine.playBell();
+
+        // Celebración visual
+        $timerSvg.classList.add('celebrate-ring');
+        setTimeout(() => $timerSvg.classList.remove('celebrate-ring'), 800);
+
+        if (state.mode === 'focus') {
+            // Pasar a descanso
+            state.mode = 'break';
+            state.timeLeft = BREAK_DURATION;
+            state.totalTime = BREAK_DURATION;
+            document.body.classList.add('break-mode');
+            showToast('Descanso merecido. Respira hondo.');
+        } else {
+            // Pasar a enfoque
+            state.mode = 'focus';
+            state.sessions++;
+            state.timeLeft = FOCUS_DURATION;
+            state.totalTime = FOCUS_DURATION;
+            document.body.classList.remove('break-mode');
+            showToast('Descanso terminado. Vamos con la sesion ' + state.sessions + '.');
+        }
+
+        $progress.style.strokeDashoffset = '0';
+        updateDisplay();
+
+        // Auto-iniciar siguiente fase
+        setTimeout(() => startTimer(), 800);
+    }
+
+    function skipPhase() {
+        pauseTimer();
+        state.timeLeft = 0;
+        switchMode();
+    }
+
+    // ================================================
+    // TOAST
+    // ================================================
+    let toastTimeout = null;
+    function showToast(msg) {
+        $toast.textContent = msg;
+        $toast.classList.add('show');
+        clearTimeout(toastTimeout);
+        toastTimeout = setTimeout(() => {
+            $toast.classList.remove('show');
+        }, 3500);
+    }
+
+    // ================================================
+    // CONTROLES DE SONIDO
+    // ================================================
+    document.querySelectorAll('.sound-card').forEach(card => {
+        const soundKey = card.dataset.sound;
+        const slider = card.querySelector('.sound-slider');
+
+        // Click para activar/desactivar
+        card.addEventListener('click', (e) => {
+            if (e.target === slider) return; // No toggle al mover slider
+            soundEngine.init();
+            const isActive = state.activeSounds.has(soundKey);
+            if (isActive) {
+                state.activeSounds.delete(soundKey);
+                card.classList.remove('active');
+                card.setAttribute('aria-pressed', 'false');
+            } else {
+                state.activeSounds.add(soundKey);
+                card.classList.add('active');
+                card.setAttribute('aria-pressed', 'true');
+            }
+            soundEngine.toggleSound(soundKey, state.activeSounds.has(soundKey));
+        });
+
+        // Enter/Space para toggle
+        card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                card.click();
+            }
+        });
+
+        // Slider de volumen
+        slider.addEventListener('input', (e) => {
+            e.stopPropagation();
+            const vol = parseInt(e.target.value) / 100;
+            soundEngine.init();
+            // Si se mueve el slider y el sonido no está activo, activarlo
+            if (!state.activeSounds.has(soundKey)) {
+                state.activeSounds.add(soundKey);
+                card.classList.add('active');
+                card.setAttribute('aria-pressed', 'true');
+                soundEngine.toggleSound(soundKey, true);
+            }
+            soundEngine.setVolume(soundKey, vol);
+        });
+
+        // Evitar que el slider propague el click
+        slider.addEventListener('click', (e) => e.stopPropagation());
+    });
+
+    // ================================================
+    // BOTONES
+    // ================================================
+    $btnPlay.addEventListener('click', () => {
+        state.running ? pauseTimer() : startTimer();
+    });
+
+    $btnReset.addEventListener('click', resetTimer);
+    $btnSkip.addEventListener('click', skipPhase);
+
+    // ================================================
+    // ATAJOS DE TECLADO
+    // ================================================
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        if (e.code === 'Space') {
+            e.preventDefault();
+            state.running ? pauseTimer() : startTimer();
+        } else if (e.key === 'r' || e.key === 'R') {
+            resetTimer();
+        } else if (e.key === 's' || e.key === 'S') {
+            skipPhase();
+        }
+    });
+
+    // ================================================
+    // SISTEMA DE PARTÍCULAS (FONDO)
+    // ================================================
+    const canvas = document.getElementById('bgCanvas');
+    const ctx = canvas.getContext('2d');
+    let particles = [];
+    const PARTICLE_COUNT = 80;
+
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    class Particle {
+        constructor() {
+            this.reset();
+        }
+
+        reset() {
+            this.x = Math.random() * canvas.width;
+            this.y = Math.random() * canvas.height;
+            this.size = Math.random() * 2.5 + 0.5;
+            this.speedX = (Math.random() - 0.5) * 0.25;
+            this.speedY = (Math.random() - 0.5) * 0.25;
+            this.opacity = Math.random() * 0.4 + 0.05;
+            this.life = Math.random() * 0.5 + 0.5;
+            this.pulse = Math.random() * Math.PI * 2;
+            this.pulseSpeed = Math.random() * 0.01 + 0.005;
+        }
+
+        update() {
+            this.x += this.speedX;
+            this.y += this.speedY;
+            this.pulse += this.pulseSpeed;
+
+            // Rebote suave
+            if (this.x < -20) this.x = canvas.width + 20;
+            if (this.x > canvas.width + 20) this.x = -20;
+            if (this.y < -20) this.y = canvas.height + 20;
+            if (this.y > canvas.height + 20) this.y = -20;
+        }
+
+        draw() {
+            const isBreak = document.body.classList.contains('break-mode');
+            const baseColor = isBreak ? [45, 212, 191] : [232, 168, 56];
+            const r = baseColor[0], g = baseColor[1], b = baseColor[2];
+            const pulseFactor = 0.7 + 0.3 * Math.sin(this.pulse);
+            const alpha = this.opacity * pulseFactor;
+            const drawSize = Math.max(0.1, this.size * 3);
+
+            const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, drawSize);
+            gradient.addColorStop(0, `rgba(${r},${g},${b},${alpha.toFixed(3)})`);
+            gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
+
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, drawSize, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+        }
+    }
+
+    function initParticles() {
+        particles = [];
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            particles.push(new Particle());
+        }
+    }
+
+    // Partículas de celebración
+    let celebrationParticles = [];
+
+    class CelebrationParticle {
+        constructor(x, y) {
+            this.x = x;
+            this.y = y;
+            const angle = Math.random() * Math.PI * 2;
+            const speed = Math.random() * 4 + 2;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.life = 1;
+            this.decay = Math.random() * 0.02 + 0.015;
+            this.size = Math.random() * 4 + 2;
+            const isBreak = document.body.classList.contains('break-mode');
+            const colors = isBreak
+                ? ['45,212,191', '56,189,248', '134,239,172']
+                : ['232,168,56', '251,191,36', '249,115,22'];
+            this.color = colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.05; // gravedad
+            this.vx *= 0.99;
+            this.life -= this.decay;
+        }
+
+        draw() {
+            if (this.life <= 0) return;
+            const alpha = Math.max(0, this.life);
+            const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, Math.max(0.1, this.size));
+            gradient.addColorStop(0, `rgba(${this.color},${alpha.toFixed(3)})`);
+            gradient.addColorStop(1, `rgba(${this.color},0)`);
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, Math.max(0.1, this.size), 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
+            ctx.fill();
+        }
+    }
+
+    // Disparar celebración desde el centro del timer
+    function triggerCelebration() {
+        const rect = document.getElementById('timerSvg').getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        for (let i = 0; i < 50; i++) {
+            celebrationParticles.push(new CelebrationParticle(cx, cy));
+        }
+    }
+
+    // Observar switchMode para celebración
+    const originalSwitchMode = switchMode;
+    // Sobrecargamos para añadir celebración
+    const _switchMode = switchMode;
+    // Reasignar: enganchar triggerCelebration en switchMode
+    window._onModeSwitch = triggerCelebration;
+
+    // Sobrescribimos switchMode para incluir la celebración
+    const __origSwitch = switchMode;
+    // Hacerlo de forma más limpia
+    (function() {
+        const orig = window.switchMode;
+    })();
+
+    // Mejor: engancharnos en el playBell que ya se llama en switchMode
+    const origPlayBell = soundEngine.playBell.bind(soundEngine);
+    soundEngine.playBell = function() {
+        origPlayBell();
+        triggerCelebration();
+    };
+
+    // Bucle de animación
+    function animate() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Dibujar partículas de fondo
+        particles.forEach(p => {
+            p.update();
+            p.draw();
+        });
+
+        // Dibujar partículas de celebración
+        celebrationParticles = celebrationParticles.filter(p => p.life > 0);
+        celebrationParticles.forEach(p => {
+            p.update();
+            p.draw();
+        });
+
+        // Líneas de conexión entre partículas cercanas (solo entre las de fondo)
+        for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+                const dx = particles[i].x - particles[j].x;
+                const dy = particles[i].y - particles[j].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 120) {
+                    const isBreak = document.body.classList.contains('break-mode');
+                    const baseColor = isBreak ? '45,212,191' : '232,168,56';
+                    const alpha = (1 - dist / 120) * 0.06;
+                    ctx.beginPath();
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.strokeStyle = `rgba(${baseColor},${alpha.toFixed(4)})`;
+                    ctx.lineWidth = 0.5;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // ================================================
+    // INICIALIZACIÓN
+    // ================================================
+    function init() {
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        initParticles();
+        updateDisplay();
+        showNextQuote();
+        quoteIntervalId = setInterval(showNextQuote, 20000);
+        animate();
+    }
+
+    init();
+    </script>
+</body>
+</html>
